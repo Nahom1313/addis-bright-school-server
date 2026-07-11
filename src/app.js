@@ -116,7 +116,12 @@ if (isProd) {
 
 // ── Routes with tiered rate limiting ─────────────────────────────
 // Serve uploaded profile pictures
-app.use('/uploads', express.static('uploads', { maxAge: '30d' }));
+app.use('/uploads', express.static('uploads', {
+  maxAge: '30d',
+  setHeaders: (res) => {
+    res.set('Cross-Origin-Resource-Policy', 'cross-origin');
+  },
+}));
 
 app.use('/api/health',      healthRouter);
 
