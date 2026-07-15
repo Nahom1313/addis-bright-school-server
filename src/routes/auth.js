@@ -3,28 +3,23 @@ import { login, register, me, forgotPassword, resetPassword, changePassword, ver
 import { protect } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { loginSchema, registerSchema, changePasswordSchema } from '../validators/authValidators.js';
-import rateLimit from 'express-rate-limit';
 
 const router = Router();
 
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
-  message: { success: false, message: 'Too many attempts. Please try again in 15 minutes.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-router.post('/register',        authLimiter, validate(registerSchema),       register);
-router.post('/login',           authLimiter, validate(loginSchema),           login);
+// Rate limiting for these routes is applied in app.js at the mount point
+// (authLimiter for login/register, the stricter passwordResetLimiter for
+// forgot/reset-password) — not duplicated here, to avoid two different
+// limiters with different windows silently stacking on the same route.
+router.post('/register',        validate(registerSchema),       register);
+router.post('/login',           validate(loginSchema),           login);
 router.get('/me',               protect,                                       me);
 // FIX: Client calls POST /auth/logout on sign-out; since JWTs are stateless this is a no-op
 // confirmation endpoint (kept for future token-blacklisting support).
 router.post('/logout',          protect, (req, res) => {
   res.json({ success: true, message: 'Logged out.' });
 });
-router.post('/forgot-password', authLimiter,                                   forgotPassword);
-router.post('/reset-password',  authLimiter,                                   resetPassword);
+router.post('/forgot-password',                                   forgotPassword);
+router.post('/reset-password',                                    resetPassword);
 // FIX: Wire up the changePassword route that was implemented but never exposed
 router.get('/verify-email',   verifyEmail);
 router.patch('/change-password', protect, validate(changePasswordSchema),     changePassword);

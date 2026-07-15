@@ -1,6 +1,23 @@
 import Attendance from '../models/Attendance.js';
 import User from '../models/User.js';
+import TeacherAssignment from '../models/TeacherAssignment.js';
 import { sendSuccess, sendError } from '../utils/response.js';
+
+const VALID_STATUSES = ['present', 'absent', 'late', 'excused'];
+
+// Confirms a teacher is actually assigned to this section before letting
+// them read/write its attendance. Directors bypass this (they manage all
+// sections). Without this check, any teacher token could submit or view
+// attendance for any section in the school.
+const assertSectionAccess = async (req, sectionId) => {
+  if (req.user.role === 'director') return true;
+  const assignment = await TeacherAssignment.findOne({
+    teacherId: req.user._id,
+    sectionId,
+    isActive: true,
+  }).lean();
+  return !!assignment;
+};
 
 // POST /api/attendance — teacher submits attendance for a section on a date
 export const submitAttendance = async (req, res, next) => {
@@ -10,8 +27,32 @@ export const submitAttendance = async (req, res, next) => {
       return sendError(res, 'sectionId, date, and entries[] are required.', 400);
     }
 
+    const hasAccess = await assertSectionAccess(req, sectionId);
+    if (!hasAccess) {
+      return sendError(res, 'You are not assigned to this section.', 403);
+    }
+
+    // Reject bad status values up front (belt-and-suspenders alongside the
+    // schema enum, since bulkWrite does not run schema validators by
+    // default and could otherwise write arbitrary strings straight to Mongo).
+    for (const entry of entries) {
+      if (entry.status && !VALID_STATUSES.includes(entry.status)) {
+        return sendError(res, `Invalid status "${entry.status}" for student ${entry.studentId}.`, 400);
+      }
+    }
+
     const attendanceDate = new Date(date);
+    if (isNaN(attendanceDate.getTime())) {
+      return sendError(res, 'Invalid date.', 400);
+    }
     attendanceDate.setUTCHours(0, 0, 0, 0); // normalise to midnight UTC
+
+    // Reject attendance dates in the future — there is nothing to attend yet.
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    if (attendanceDate.getTime() > today.getTime()) {
+      return sendError(res, 'Attendance date cannot be in the future.', 400);
+    }
 
     const ops = entries.map(({ studentId, status, note }) => ({
       updateOne: {
@@ -30,7 +71,7 @@ export const submitAttendance = async (req, res, next) => {
       },
     }));
 
-    await Attendance.bulkWrite(ops);
+    await Attendance.bulkWrite(ops, { runValidators: true });
     sendSuccess(res, { saved: entries.length }, 'Attendance saved.');
   } catch (err) { next(err); }
 };
@@ -40,6 +81,11 @@ export const getBySection = async (req, res, next) => {
   try {
     const { sectionId, date } = req.query;
     if (!sectionId) return sendError(res, 'sectionId is required.', 400);
+
+    const hasAccess = await assertSectionAccess(req, sectionId);
+    if (!hasAccess) {
+      return sendError(res, 'You are not assigned to this section.', 403);
+    }
 
     const query = { sectionId };
     if (date) {

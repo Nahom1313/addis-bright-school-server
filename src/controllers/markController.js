@@ -1,6 +1,22 @@
 import Mark from '../models/Mark.js';
 import User from '../models/User.js';
+import TeacherAssignment from '../models/TeacherAssignment.js';
 import { sendSuccess, sendError } from '../utils/response.js';
+
+// Confirms a teacher is actually assigned to teach this section+subject
+// before letting them read/write its marks. Directors bypass this (they
+// manage all sections/subjects). Without this check, any teacher token
+// could overwrite or read another teacher's class marks.
+const assertSubjectAccess = async (req, sectionId, subject) => {
+  if (req.user.role === 'director') return true;
+  const assignment = await TeacherAssignment.findOne({
+    teacherId: req.user._id,
+    sectionId,
+    subject,
+    isActive: true,
+  }).lean();
+  return !!assignment;
+};
 
 // POST /api/marks/entry — teacher saves marks for a section+subject (bulk upsert)
 export const saveGrades = async (req, res, next) => {
@@ -10,9 +26,24 @@ export const saveGrades = async (req, res, next) => {
       return sendError(res, 'sectionId and entries[] are required.', 400);
     }
 
-    // FIX: Validate score <= maxScore before persisting
+    // Every entry must belong to a subject the teacher is actually assigned
+    // to teach in this section (directors are exempt).
+    const subjects = [...new Set(entries.map(e => e.subject).filter(Boolean))];
+    for (const subject of subjects) {
+      const hasAccess = await assertSubjectAccess(req, sectionId, subject);
+      if (!hasAccess) {
+        return sendError(res, `You are not assigned to teach ${subject} for this section.`, 403);
+      }
+    }
+
+    // FIX: Validate score <= maxScore before persisting.
+    // Use a null/undefined check rather than `||`, since `||` treats a
+    // legitimate maxScore of 0 as falsy and silently rewrites it to 100.
     for (const entry of entries) {
-      const max = entry.maxScore || 100;
+      const max = (entry.maxScore === undefined || entry.maxScore === null) ? 100 : entry.maxScore;
+      if (typeof max !== 'number' || max <= 0) {
+        return sendError(res, `Invalid maxScore for student ${entry.studentId}: must be a positive number.`, 400);
+      }
       if (typeof entry.score !== 'number' || entry.score < 0) {
         return sendError(res, `Invalid score for student ${entry.studentId}: must be a non-negative number.`, 400);
       }
@@ -24,12 +55,19 @@ export const saveGrades = async (req, res, next) => {
     const ops = entries.map(({ studentId, score, maxScore, subject, term }) => ({
       updateOne: {
         filter: { studentId, sectionId, subject, teacherId: req.user._id },
-        update: { $set: { score, maxScore: maxScore || 100, teacherId: req.user._id, term: term || 'Term 1' } },
+        update: {
+          $set: {
+            score,
+            maxScore: (maxScore === undefined || maxScore === null) ? 100 : maxScore,
+            teacherId: req.user._id,
+            term: term || 'Term 1',
+          },
+        },
         upsert: true,
       },
     }));
 
-    await Mark.bulkWrite(ops);
+    await Mark.bulkWrite(ops, { runValidators: true });
     sendSuccess(res, { saved: entries.length }, 'Grades saved.');
   } catch (err) { next(err); }
 };
@@ -39,6 +77,12 @@ export const getGrades = async (req, res, next) => {
   try {
     const { sectionId, subject } = req.query;
     if (!sectionId || !subject) return sendError(res, 'sectionId and subject required.', 400);
+
+    const hasAccess = await assertSubjectAccess(req, sectionId, subject);
+    if (!hasAccess) {
+      return sendError(res, 'You are not assigned to teach this subject for this section.', 403);
+    }
+
     const marks = await Mark.find({ sectionId, subject }).lean();
     const scoreMap = marks.reduce((acc, m) => { acc[m.studentId] = m.score; return acc; }, {});
     sendSuccess(res, { marks, scoreMap });

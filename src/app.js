@@ -101,8 +101,11 @@ app.use(compression({
 }));
 
 // ── Request parsing ───────────────────────────────────────────────
-app.use(express.json({ limit: '10kb' }));
-app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+// 10kb was too small for legitimate bulk operations — a 200-row student
+// bulk import, or a full class's attendance/grades in one submission,
+// comfortably exceeds it and was being rejected with a raw 413.
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 // Prevent NoSQL injection attacks
 app.use(mongoSanitize());
 
@@ -116,12 +119,7 @@ if (isProd) {
 
 // ── Routes with tiered rate limiting ─────────────────────────────
 // Serve uploaded profile pictures
-app.use('/uploads', express.static('uploads', {
-  maxAge: '30d',
-  setHeaders: (res) => {
-    res.set('Cross-Origin-Resource-Policy', 'cross-origin');
-  },
-}));
+app.use('/uploads', express.static('uploads', { maxAge: '30d' }));
 
 app.use('/api/health',      healthRouter);
 
