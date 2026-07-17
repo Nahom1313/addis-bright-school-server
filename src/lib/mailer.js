@@ -7,6 +7,13 @@ const getTransporter = () => {
       port: Number(process.env.SMTP_PORT) || 587,
       secure: false,
       auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+      // FIX: without these, a stuck/unresponsive connection to Gmail hangs
+      // forever instead of erroring — the request never resolves and the
+      // browser eventually cancels it (visible as HTTP 499 in Railway logs,
+      // with the server never logging a response at all).
+      connectionTimeout: 10000, // fail if we can't even open the TCP connection in 10s
+      greetingTimeout:   10000, // fail if the SMTP server doesn't say hello in 10s
+      socketTimeout:     15000, // fail if the socket goes idle mid-send for 15s
     });
   }
   return null;
@@ -20,12 +27,19 @@ const sendMail = async (to, subject, html) => {
     console.log('🔗 (configure SMTP_HOST/USER/PASS to send real emails)\n');
     return;
   }
-  await transporter.sendMail({
-    from: `"Addis Bright School" <${process.env.SMTP_USER}>`,
-    to,
-    subject,
-    html,
-  });
+  try {
+    await transporter.sendMail({
+      from: `"Addis Bright School" <${process.env.SMTP_USER}>`,
+      to,
+      subject,
+      html,
+    });
+  } catch (err) {
+    // FIX: surface the real SMTP error in logs instead of letting it
+    // propagate as a generic failure with no diagnostic info
+    console.error(`✉️  Failed to send email to ${to}: ${err.code || ''} ${err.message}`);
+    throw err;
+  }
 };
 
 export const sendResetEmail = async (toEmail, firstName, resetUrl) => {
