@@ -1,44 +1,41 @@
-import nodemailer from 'nodemailer';
-
-const getTransporter = () => {
-  if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-    return nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: Number(process.env.SMTP_PORT) || 587,
-      secure: false,
-      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-      // FIX: without these, a stuck/unresponsive connection to Gmail hangs
-      // forever instead of erroring — the request never resolves and the
-      // browser eventually cancels it (visible as HTTP 499 in Railway logs,
-      // with the server never logging a response at all).
-      connectionTimeout: 10000, // fail if we can't even open the TCP connection in 10s
-      greetingTimeout:   10000, // fail if the SMTP server doesn't say hello in 10s
-      socketTimeout:     15000, // fail if the socket goes idle mid-send for 15s
-    });
-  }
-  return null;
-};
+// Railway (like most cloud hosts) blocks outbound traffic on raw SMTP ports
+// (587/465) by default to prevent the platform being abused for spam — this
+// is why nodemailer connections to Gmail/Resend's SMTP servers were timing
+// out (ETIMEDOUT) regardless of which provider or credentials were used.
+// Resend's HTTP API sidesteps this entirely since it's a normal HTTPS
+// request on port 443, which is never blocked.
+const RESEND_API_URL = 'https://api.resend.com/emails';
 
 const sendMail = async (to, subject, html) => {
-  const transporter = getTransporter();
-  if (!transporter) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
     console.log(`\n📧 [DEV] Email to: ${to}`);
     console.log(`📌 Subject: ${subject}`);
-    console.log('🔗 (configure SMTP_HOST/USER/PASS to send real emails)\n');
+    console.log('🔗 (configure RESEND_API_KEY to send real emails)\n');
     return;
   }
-  try {
-    await transporter.sendMail({
-      from: `"Addis Bright School" <${process.env.SMTP_USER}>`,
+
+  const res = await fetch(RESEND_API_URL, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      // "onboarding@resend.dev" works immediately with no setup, but only
+      // delivers to the email address you signed up to Resend with, until
+      // you verify a real domain in the Resend dashboard.
+      from: process.env.RESEND_FROM || 'Addis Bright School <onboarding@resend.dev>',
       to,
       subject,
       html,
-    });
-  } catch (err) {
-    // FIX: surface the real SMTP error in logs instead of letting it
-    // propagate as a generic failure with no diagnostic info
-    console.error(`✉️  Failed to send email to ${to}: ${err.code || ''} ${err.message}`);
-    throw err;
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    console.error(`✉️  Failed to send email to ${to}: HTTP ${res.status} ${body}`);
+    throw new Error(`Resend API error: ${res.status}`);
   }
 };
 
