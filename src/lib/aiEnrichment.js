@@ -49,10 +49,21 @@ const enrichWithRetry = async (rawNote, studentName, teacherName, maxRetries = 3
         messages: [{ role: 'user', content: buildPrompt(rawNote, studentName, teacherName) }],
         temperature: 0.4,
         max_tokens: 300,
+        // Force strict JSON output — without this, GPT-OSS models can
+        // include their internal reasoning/chain-of-thought text wrapped
+        // around the JSON by default, which breaks a plain JSON.parse().
+        response_format: { type: 'json_object' },
       });
 
-      const text   = completion.choices[0]?.message?.content || '';
-      const clean  = text.replace(/```json|```/gi, '').trim();
+      const text  = completion.choices[0]?.message?.content || '';
+      let clean = text.replace(/```json|```/gi, '').trim();
+      // Defense-in-depth: even with response_format set, extract just the
+      // {...} portion in case any stray text still surrounds it.
+      const firstBrace = clean.indexOf('{');
+      const lastBrace  = clean.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        clean = clean.slice(firstBrace, lastBrace + 1);
+      }
       const parsed = JSON.parse(clean);
 
       if (!parsed.summary || !parsed.tone || !parsed.category) {
