@@ -31,6 +31,8 @@ import sectionReportRouter from './routes/sectionReports.js';
 import announcementRouter  from './routes/announcements.js';
 import calendarRouter      from './routes/calendar.js';
 import transferRouter      from './routes/transfers.js';
+import resourceRouter      from './routes/resources.js';
+import quizRouter          from './routes/quizzes.js';
 import './models/StatusLog.js';
 import './models/Timetable.js';
 import './models/AuditLog.js';
@@ -119,7 +121,12 @@ if (isProd) {
 
 // ── Routes with tiered rate limiting ─────────────────────────────
 // Serve uploaded profile pictures
-app.use('/uploads', express.static('uploads', { maxAge: '30d' }));
+app.use('/uploads', express.static('uploads', {
+  maxAge: '30d',
+  setHeaders: (res) => {
+    res.set('Cross-Origin-Resource-Policy', 'cross-origin');
+  },
+}));
 
 app.use('/api/health',      healthRouter);
 
@@ -157,6 +164,8 @@ app.use('/api/section-reports', sectionReportRouter);
 app.use('/api/announcements',   announcementRouter);
 app.use('/api/calendar',        calendarRouter);
 app.use('/api/transfers',       transferRouter);
+app.use('/api/resources',       resourceRouter);
+app.use('/api/quizzes',         quizRouter);
 
 // ── Static files + SPA fallback ───────────────────────────────────
 if (isProd && existsSync(PUBLIC_DIR)) {

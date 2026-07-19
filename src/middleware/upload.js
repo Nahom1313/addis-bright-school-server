@@ -83,3 +83,43 @@ export const handlePaymentUpload = (req, res, next) => {
     next();
   });
 };
+
+// ─── Study library files ────────────────────────────────────────────
+// Teachers upload notes/books/worksheets. Accepts documents, slides and
+// images. Stored under a separate Cloudinary folder from payments/profiles.
+const resourceStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder:          'school-platform/resources',
+    allowed_formats: ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'jpg', 'jpeg', 'png'],
+    resource_type:   'auto',
+    public_id: (_req, file) => {
+      const name = file.originalname.replace(/\.[^.]+$/, '').replace(/[^a-z0-9]/gi, '_');
+      return `${name}_${Date.now()}`;
+    },
+  },
+});
+
+const uploadResourceRaw = multer({
+  storage: resourceStorage,
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB — study PDFs/slide decks are bigger than a payment screenshot
+  fileFilter: (_req, file, cb) => {
+    const allowedExt = /pdf|doc|docx|ppt|pptx|jpeg|jpg|png/;
+    const allowedMime = /pdf|msword|officedocument|jpeg|jpg|png/;
+    if (allowedExt.test(file.originalname.toLowerCase()) && allowedMime.test(file.mimetype)) {
+      return cb(null, true);
+    }
+    cb(new Error('Only PDF, Word, PowerPoint, or image files are allowed.'));
+  },
+}).single('file');
+
+export const handleResourceUpload = (req, res, next) => {
+  uploadResourceRaw(req, res, (err) => {
+    if (err) return res.status(400).json({ success: false, message: err.message });
+    if (req.file) {
+      req.file.filename = req.file.path; // normalise to full URL
+      req.file.originalName = req.file.originalname;
+    }
+    next();
+  });
+};
