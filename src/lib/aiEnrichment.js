@@ -48,17 +48,22 @@ const enrichWithRetry = async (rawNote, studentName, teacherName, maxRetries = 3
         model: 'openai/gpt-oss-20b',  // recommended replacement for llama-3.1-8b-instant (June 2026)
         messages: [{ role: 'user', content: buildPrompt(rawNote, studentName, teacherName) }],
         temperature: 0.4,
-        max_tokens: 300,
-        // Force strict JSON output — without this, GPT-OSS models can
-        // include their internal reasoning/chain-of-thought text wrapped
-        // around the JSON by default, which breaks a plain JSON.parse().
+        max_completion_tokens: 500,
+        // GPT-OSS models include their internal reasoning/chain-of-thought
+        // text in the response by default (include_reasoning defaults to
+        // true on Groq). That reasoning text was eating into the token
+        // budget and leaving the actual JSON answer truncated mid-output —
+        // this is what caused "Unexpected end of JSON input" on every call.
+        include_reasoning: false,
+        reasoning_effort: 'low',
+        // Force strict JSON output as a second layer of protection.
         response_format: { type: 'json_object' },
       });
 
       const text  = completion.choices[0]?.message?.content || '';
       let clean = text.replace(/```json|```/gi, '').trim();
-      // Defense-in-depth: even with response_format set, extract just the
-      // {...} portion in case any stray text still surrounds it.
+      // Defense-in-depth: even with the above, extract just the {...}
+      // portion in case any stray text still surrounds it.
       const firstBrace = clean.indexOf('{');
       const lastBrace  = clean.lastIndexOf('}');
       if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
