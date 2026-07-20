@@ -1,16 +1,4 @@
-import Groq from 'groq-sdk';
-
-let client = null;
-
-const getClient = () => {
-  if (!client) {
-    if (!process.env.GROQ_API_KEY || process.env.GROQ_API_KEY === 'replace_me') {
-      throw new Error('GROQ_API_KEY is not configured in server/.env');
-    }
-    client = new Groq({ apiKey: process.env.GROQ_API_KEY });
-  }
-  return client;
-};
+import { getGroqClient, sleep, isRetryableGroqError } from './groqClient.js';
 
 const buildPrompt = (rawNote, studentName, teacherName) => `
 You are a school communication assistant helping teachers write encouraging, constructive status updates for parents.
@@ -36,10 +24,8 @@ Rules:
 - Be warm, specific, and parent-friendly
 `.trim();
 
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
 const enrichWithRetry = async (rawNote, studentName, teacherName, maxRetries = 3) => {
-  const groq = getClient();
+  const groq = getGroqClient();
   let lastError;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -51,16 +37,16 @@ const enrichWithRetry = async (rawNote, studentName, teacherName, maxRetries = 3
         max_completion_tokens: 500,
         // GPT-OSS models include their internal reasoning/chain-of-thought
         // text in the response by default (include_reasoning defaults to
-        // true on Groq). That reasoning text was eating into the token
-        // budget and leaving the actual JSON answer truncated mid-output —
-        // this is what caused "Unexpected end of JSON input" on every call.
+        // true on Groq). That reasoning text eats into the token budget and
+        // leaves the actual JSON answer truncated mid-output — this is what
+        // caused "Unexpected end of JSON input" before this fix.
         include_reasoning: false,
         reasoning_effort: 'low',
         // Force strict JSON output as a second layer of protection.
         response_format: { type: 'json_object' },
       });
 
-      const text  = completion.choices[0]?.message?.content || '';
+      const text = completion.choices[0]?.message?.content || '';
       let clean = text.replace(/```json|```/gi, '').trim();
       // Defense-in-depth: even with the above, extract just the {...}
       // portion in case any stray text still surrounds it.
@@ -84,11 +70,7 @@ const enrichWithRetry = async (rawNote, studentName, teacherName, maxRetries = 3
     } catch (err) {
       lastError = err;
 
-      const isRetryable =
-        err.status >= 500 ||
-        err.status === 429 ||
-        err.code === 'ECONNRESET' ||
-        err.code === 'ETIMEDOUT';
+      const isRetryable = isRetryableGroqError(err);
 
       if (!isRetryable || attempt === maxRetries) break;
 

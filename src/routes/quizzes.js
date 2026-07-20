@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import Quiz from '../models/Quiz.js';
 import QuizAttempt from '../models/QuizAttempt.js';
@@ -6,9 +7,25 @@ import User from '../models/User.js';
 import { protect } from '../middleware/auth.js';
 import { restrictTo } from '../middleware/rbac.js';
 import { sendSuccess, sendError } from '../utils/response.js';
+import generateQuizWithRetry from '../lib/aiQuizGenerator.js';
 
 const router = Router();
 router.use(protect);
+
+// Dedicated limiter for AI generation calls — protects Groq API spend.
+// Generating a full quiz is a bigger, less-frequent action than a status
+// log, so this is a bit tighter than the 30/10min used for status logs.
+const aiGenerateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 min
+  max: 15,
+  keyGenerator: (req) => String(req.user?._id || req.ip),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many AI quiz-generation requests. Please wait a few minutes before trying again.',
+  },
+});
 
 // ─── Validators ───────────────────────────────────────────────────
 const questionSchema = z.object({
@@ -30,6 +47,14 @@ const createSchema = z.object({
 });
 
 const updateSchema = createSchema.partial();
+
+const generateSchema = z.object({
+  subject:      z.string().min(1).max(100),
+  topic:        z.string().min(3).max(500),
+  numQuestions: z.number().int().min(1).max(20),
+  difficulty:   z.enum(['easy', 'medium', 'hard']).optional(),
+  sourceText:   z.string().max(4000).optional().nullable(),
+});
 
 const submitSchema = z.object({
   answers:          z.array(z.number().int().min(-1)).min(1),
@@ -87,6 +112,22 @@ router.get('/mine', restrictTo('teacher'), async (req, res, next) => {
     const quizzes = await Quiz.find({ teacherId: req.user._id, isActive: true }).sort({ createdAt: -1 });
     sendSuccess(res, { quizzes });
   } catch (err) { next(err); }
+});
+
+// ─── POST /api/quizzes/generate — AI drafts questions; teacher reviews before saving ───
+router.post('/generate', restrictTo('teacher'), aiGenerateLimiter, async (req, res, next) => {
+  try {
+    const parsed = generateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return sendError(res, 'Validation failed', 422, parsed.error.errors.map(e => ({ field: e.path.join('.'), message: e.message })));
+    }
+
+    const questions = await generateQuizWithRetry(parsed.data);
+    sendSuccess(res, { questions }, `Generated ${questions.length} question${questions.length !== 1 ? 's' : ''} — review before saving.`);
+  } catch (err) {
+    console.error('[AI quiz-gen] Failed:', err.message);
+    sendError(res, 'AI quiz generation is temporarily unavailable. Please try again in a moment, or add questions manually.', 503);
+  }
 });
 
 // ─── GET /api/quizzes/:id — fetch one quiz to take (answers stripped for students) ───
