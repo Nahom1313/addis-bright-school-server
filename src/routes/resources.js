@@ -4,6 +4,7 @@ import Resource from '../models/Resource.js';
 import { protect } from '../middleware/auth.js';
 import { restrictTo } from '../middleware/rbac.js';
 import { handleResourceUpload, cloudinary } from '../middleware/upload.js';
+import { extractPdfText } from '../lib/pdfExtract.js';
 import { sendSuccess, sendError } from '../utils/response.js';
 
 const router = Router();
@@ -83,6 +84,15 @@ router.post('/', restrictTo('teacher'), handleResourceUpload, async (req, res, n
       fileUrl:  data.type === 'file' ? req.file.filename : null,
       fileName: data.type === 'file' ? req.file.originalName : null,
     });
+
+    // Extract PDF text in the background so the study-helper chat can use
+    // it later — never delays the upload response, and never fails the
+    // upload if extraction has trouble.
+    if (data.type === 'file' && req.file.originalName?.toLowerCase().endsWith('.pdf')) {
+      extractPdfText(resource.fileUrl)
+        .then(text => text && Resource.updateOne({ _id: resource._id }, { extractedText: text }))
+        .catch(err => console.error('[resources] PDF extraction failed:', err.message));
+    }
 
     const populated = await populateResource(Resource.findById(resource._id));
     sendSuccess(res, { resource: populated }, 'Resource added to the study library.', 201);

@@ -33,6 +33,8 @@ import calendarRouter      from './routes/calendar.js';
 import transferRouter      from './routes/transfers.js';
 import resourceRouter      from './routes/resources.js';
 import quizRouter          from './routes/quizzes.js';
+import parentSummaryRouter from './routes/parentSummary.js';
+import studyHelperRouter   from './routes/studyHelper.js';
 import './models/StatusLog.js';
 import './models/Timetable.js';
 import './models/AuditLog.js';
@@ -166,6 +168,8 @@ app.use('/api/calendar',        calendarRouter);
 app.use('/api/transfers',       transferRouter);
 app.use('/api/resources',       resourceRouter);
 app.use('/api/quizzes',         quizRouter);
+app.use('/api/parent-summary',  parentSummaryRouter);
+app.use('/api/study-helper',    studyHelperRouter);
 
 // ── Static files + SPA fallback ───────────────────────────────────
 if (isProd && existsSync(PUBLIC_DIR)) {

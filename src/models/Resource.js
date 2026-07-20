@@ -43,6 +43,14 @@ const resourceSchema = new mongoose.Schema(
       trim: true,
       default: null,
     },
+    // Text extracted from PDF uploads, used to ground the AI study-helper
+    // chat in the actual material rather than letting it guess. Capped at
+    // ~6000 chars to keep chat prompts a reasonable size. null for
+    // non-PDF files, links, and videos.
+    extractedText: {
+      type: String,
+      default: null,
+    },
     externalUrl: {
       type: String,
       trim: true,
