@@ -56,98 +56,12 @@ router.get('/:id/assignments', protect, (req, res, next) => {
 
 export default router;
 
-// ─── Advanced analytics for director dashboard ────────────────────
-import Attendance from '../models/Attendance.js';
-import StatusLog  from '../models/StatusLog.js';
-import Mark       from '../models/Mark.js';
+// ─── Advanced analytics for director/registrar dashboards ─────────
+import { getAnalyticsOverview } from '../services/analyticsService.js';
 
-router.get('/analytics/overview', protect, isDirector, async (req, res, next) => {
+router.get('/analytics/overview', protect, restrictTo('director', 'registrar'), async (req, res, next) => {
   try {
-    const User     = (await import('../models/User.js')).default;
-    const Section  = (await import('../models/Section.js')).default;
-
-    const now     = new Date();
-    const day30   = new Date(now); day30.setDate(day30.getDate() - 30);
-    const day7    = new Date(now); day7.setDate(day7.getDate() - 7);
-
-    const [
-      totalStudents, totalTeachers, totalParents,
-      activeStudents30, newStudents7,
-      attendanceStats, logStats, markStats,
-      logsByTone, logsByCategory,
-    ] = await Promise.all([
-      User.countDocuments({ role: 'student', isActive: true }),
-      User.countDocuments({ role: 'teacher', isActive: true }),
-      User.countDocuments({ role: 'parent',  isActive: true }),
-      User.countDocuments({ role: 'student', isActive: true }),
-      User.countDocuments({ role: 'student', isActive: true, createdAt: { $gte: day7 } }),
-
-      // Attendance breakdown last 30 days
-      Attendance.aggregate([
-        { $match: { date: { $gte: day30 } } },
-        { $group: { _id: '$status', count: { $sum: 1 } } },
-      ]),
-
-      // Log activity last 30 days
-      StatusLog.aggregate([
-        { $match: { createdAt: { $gte: day30 } } },
-        {
-          $group: {
-            _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
-            count: { $sum: 1 },
-          },
-        },
-        { $sort: { _id: 1 } },
-      ]),
-
-      // Average marks per subject
-      Mark.aggregate([
-        {
-          $group: {
-            _id: '$subject',
-            avg: { $avg: { $multiply: [{ $divide: ['$score', '$maxScore'] }, 100] } },
-            count: { $sum: 1 },
-          },
-        },
-        { $sort: { avg: -1 } },
-        { $limit: 8 },
-      ]),
-
-      // Logs by tone
-      StatusLog.aggregate([
-        { $match: { enriched: true } },
-        { $group: { _id: '$tone', count: { $sum: 1 } } },
-      ]),
-
-      // Logs by category
-      StatusLog.aggregate([
-        { $match: { enriched: true } },
-        { $group: { _id: '$category', count: { $sum: 1 } } },
-        { $sort: { count: -1 } },
-      ]),
-    ]);
-
-    // Reshape attendance
-    const attMap = attendanceStats.reduce((m, a) => { m[a._id] = a.count; return m; }, {});
-    const totalAtt = Object.values(attMap).reduce((s, v) => s + v, 0);
-
-    res.json({
-      success: true,
-      data: {
-        totals: { students: totalStudents, teachers: totalTeachers, parents: totalParents, newStudents7 },
-        attendance: {
-          present: attMap.present || 0,
-          absent:  attMap.absent  || 0,
-          late:    attMap.late    || 0,
-          excused: attMap.excused || 0,
-          total:   totalAtt,
-          rate:    totalAtt > 0 ? Math.round(((attMap.present || 0) / totalAtt) * 100) : null,
-        },
-        logActivity: logStats.map(l => ({ date: l._id, count: l.count })),
-        marksBySubject: markStats.map(m => ({ subject: m._id, avg: Math.round(m.avg), count: m.count })),
-        logsByTone:     logsByTone.map(l => ({ tone: l._id, count: l.count })),
-        logsByCategory: logsByCategory.map(l => ({ category: l._id, count: l.count })),
-      },
-    });
+    const data = await getAnalyticsOverview();
+    res.json({ success: true, data });
   } catch (err) { next(err); }
 });
